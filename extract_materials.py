@@ -453,6 +453,81 @@ class MaterialTableParser:
         return rows
 
 
+class PlainTextMaterialParser:
+    """Fallback parser using plain extracted text when positional parsing fails."""
+
+    ITEM_RE = re.compile(r"^\s*(\d+)\s+(.+?)\s+(\d+(?:\.\d+)?)\s*$")
+
+    @classmethod
+    def parse_pdf(cls, pdf_path: Path) -> list[MaterialRow]:
+        if PdfReader is None:
+            return []
+
+        try:
+            reader = PdfReader(str(pdf_path))
+        except Exception:
+            return []
+
+        rows: list[MaterialRow] = []
+        section = ""
+        category = ""
+
+        for page in reader.pages:
+            try:
+                text = page.extract_text() or ""
+            except Exception:
+                continue
+
+            for raw_line in text.splitlines():
+                line = re.sub(r"\s+", " ", raw_line).strip()
+                if not line:
+                    continue
+
+                upper = line.upper()
+                if "FABRICATION" in upper and "MATERIAL" in upper:
+                    section = "FABRICATION MATERIALS"
+                    continue
+                if "ERECTION" in upper and "MATERIAL" in upper:
+                    section = "ERECTION MATERIALS"
+                    continue
+
+                if any(h in upper for h in ("DESCRIPTION", "COMMODITY", "QTY", "PT.", "CODE", "SIZE")):
+                    continue
+
+                if "FITTING" in upper and len(line.split()) <= 4:
+                    category = "FITTINGS"
+                    continue
+                if "FLANGE" in upper and len(line.split()) <= 4:
+                    category = "FLANGES"
+                    continue
+                if "BOLT" in upper and len(line.split()) <= 4:
+                    category = "BOLTS"
+                    continue
+                if "VALVE" in upper and len(line.split()) <= 4:
+                    category = "VALVES"
+                    continue
+
+                m = cls.ITEM_RE.match(line)
+                if not m:
+                    continue
+
+                pt_no, middle, qty = m.group(1), m.group(2), m.group(3)
+                rows.append(
+                    MaterialRow(
+                        section=section,
+                        category=category,
+                        pt_no=pt_no,
+                        description=middle,
+                        size_inch="",
+                        commodity="",
+                        code="",
+                        qty=qty,
+                    )
+                )
+
+        return rows
+
+
 class XlsxWriter:
     @staticmethod
     def _col_name(index: int) -> str:
@@ -581,6 +656,8 @@ def main() -> None:
         raise SystemExit("No extractable text tokens found in PDF.")
 
     rows = MaterialTableParser(tokens).parse()
+    if not rows:
+        rows = PlainTextMaterialParser.parse_pdf(args.input_pdf)
     if not rows:
         raise SystemExit(
             "No material rows were detected. Try a clearer PDF or adjust parser thresholds."

@@ -9,7 +9,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from extract_materials import MaterialTableParser, PdfTextExtractor, XlsxWriter
+from extract_materials import MaterialTableParser, PdfTextExtractor, PlainTextMaterialParser, XlsxWriter
 
 HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "10000"))
@@ -229,6 +229,8 @@ class AppHandler(BaseHTTPRequestHandler):
                     raise ValueError("Could not extract text from PDF")
 
                 rows = MaterialTableParser(tokens).parse()
+                if not rows:
+                    rows = PlainTextMaterialParser.parse_pdf(input_pdf)
                 if not rows:
                     raise ValueError("No material rows found in this PDF")
 
