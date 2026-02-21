@@ -13,7 +13,7 @@ pip3 install -r requirements.txt
 ## 1) CLI Usage
 
 ```bash
-python3 "/Users/gokulkrishnan/Documents/New project/extract_materials.py" \
+python3 "./extract_materials.py" \
   "/path/to/input.pdf" \
   -o "/path/to/output.xlsx"
 ```
@@ -21,7 +21,7 @@ python3 "/Users/gokulkrishnan/Documents/New project/extract_materials.py" \
 Example:
 
 ```bash
-python3 "/Users/gokulkrishnan/Documents/New project/extract_materials.py" \
+python3 "./extract_materials.py" \
   "/Users/gokulkrishnan/Downloads/51408.pdf" \
   -o "/Users/gokulkrishnan/Documents/New project/materials_51408.xlsx"
 ```
@@ -31,7 +31,7 @@ python3 "/Users/gokulkrishnan/Documents/New project/extract_materials.py" \
 Run:
 
 ```bash
-python3 "/Users/gokulkrishnan/Documents/New project/web_ui.py"
+python3 "./web_ui.py"
 ```
 
 Open in browser:
