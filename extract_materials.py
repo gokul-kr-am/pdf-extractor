@@ -32,12 +32,46 @@ INVALID_XML_CHARS_RE = re.compile(
     r"[\x00-\x08\x0B\x0C\x0E-\x1F\uD800-\uDFFF\uFFFE\uFFFF]"
 )
 
-DEBUG_ENABLED = os.environ.get("PDF_EXTRACT_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+
+def _load_properties(path: Path) -> dict[str, str]:
+    props: dict[str, str] = {}
+    try:
+        content = path.read_text(encoding="utf-8")
+    except Exception:
+        return props
+
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        props[k.strip()] = v.strip()
+    return props
+
+
+APP_PROPS = _load_properties(Path(__file__).with_name("app.properties"))
+DEBUG_ENABLED = (
+    os.environ.get("PDF_EXTRACT_DEBUG", APP_PROPS.get("PDF_EXTRACT_DEBUG", ""))
+    .strip()
+    .lower()
+    in {"1", "true", "yes", "on"}
+)
+DEBUG_LOG_FILE = os.environ.get("PDF_EXTRACT_DEBUG_FILE", APP_PROPS.get("PDF_EXTRACT_DEBUG_FILE", "")).strip()
 
 
 def debug_log(message: str) -> None:
     if DEBUG_ENABLED:
-        print(f"[pdf-extractor] {message}", file=sys.stderr, flush=True)
+        line = f"[pdf-extractor] {message}"
+        print(line, file=sys.stderr, flush=True)
+        if DEBUG_LOG_FILE:
+            try:
+                with open(DEBUG_LOG_FILE, "a", encoding="utf-8") as fh:
+                    fh.write(line + "\n")
+            except Exception:
+                # Never fail extraction because debug file logging failed.
+                pass
 
 
 @dataclass
