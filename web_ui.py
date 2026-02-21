@@ -9,7 +9,13 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from extract_materials import MaterialTableParser, PdfTextExtractor, PlainTextMaterialParser, XlsxWriter
+from extract_materials import (
+    MaterialTableParser,
+    PdfTextExtractor,
+    PlainTextMaterialParser,
+    XlsxWriter,
+    debug_log,
+)
 
 HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "10000"))
@@ -202,6 +208,7 @@ class AppHandler(BaseHTTPRequestHandler):
             return
 
         try:
+            debug_log("web request: /extract started")
             content_length = int(self.headers.get("Content-Length", "0"))
             if content_length <= 0:
                 raise ValueError("Empty request body")
@@ -225,18 +232,22 @@ class AppHandler(BaseHTTPRequestHandler):
                 input_pdf.write_bytes(pdf_data)
 
                 tokens = PdfTextExtractor(input_pdf).extract_tokens()
+                debug_log(f"web request: extracted tokens={len(tokens)}")
                 if not tokens:
                     raise ValueError("Could not extract text from PDF")
 
                 rows = MaterialTableParser(tokens).parse()
+                debug_log(f"web request: primary parser rows={len(rows)}")
                 if not rows:
                     rows = PlainTextMaterialParser.parse_pdf(input_pdf)
+                    debug_log(f"web request: plaintext fallback rows={len(rows)}")
                 if not rows:
                     raise ValueError("No material rows found in this PDF")
 
                 out_xlsx = tmp_dir / "materials.xlsx"
                 XlsxWriter.write(rows, out_xlsx)
                 xlsx_bytes = out_xlsx.read_bytes()
+                debug_log(f"web request: xlsx bytes={len(xlsx_bytes)} rows={len(rows)}")
 
             base_name = Path(filename).stem
             download_name = f"{base_name}_materials.xlsx"
@@ -252,6 +263,7 @@ class AppHandler(BaseHTTPRequestHandler):
             self.wfile.write(xlsx_bytes)
 
         except Exception as exc:
+            debug_log(f"web request error: {exc}")
             body = _render_index(str(exc), error=True).encode("utf-8")
             self.send_response(HTTPStatus.BAD_REQUEST)
             self.send_header("Content-Type", "text/html; charset=utf-8")
