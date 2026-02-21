@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import html
 import re
-import statistics
 import zipfile
 import zlib
 from dataclasses import dataclass
@@ -104,7 +103,7 @@ class PdfTextExtractor:
 
     def _extract_tokens_pypdf(self) -> list[TextToken]:
         if PdfReader is None:
-            raise RuntimeError("Missing dependency: install with `pip3 install -r requirements.txt`")
+            return []
 
         tokens: list[TextToken] = []
         try:
@@ -237,32 +236,6 @@ class MaterialTableParser:
     def __init__(self, tokens: Iterable[TextToken]) -> None:
         # Preserve stream/page progression first, then line geometry within each group.
         self.tokens = sorted(tokens, key=lambda t: (t.group, -t.y, t.x))
-        self.group_x_offsets = self._build_group_x_offsets(self.tokens)
-
-    @classmethod
-    def _build_group_x_offsets(cls, tokens: list[TextToken]) -> dict[int, float]:
-        # Some PDFs apply page-specific X translations; estimate a per-page offset
-        # from header label anchors to keep column classification stable.
-        expected_anchor_x = {
-            "DESCRIPTION": cls.DESC_MIN_X,
-            "SIZE": cls.SIZE_MIN_X,
-            "COMMODITY": cls.COM_MIN_X,
-            "CODE": cls.CODE_MIN_X,
-            "QTY": cls.QTY_MIN_X,
-        }
-        offsets: dict[int, list[float]] = {}
-        for token in tokens:
-            text = token.text.upper()
-            for key, expected_x in expected_anchor_x.items():
-                if key in text:
-                    offsets.setdefault(token.group, []).append(token.x - expected_x)
-                    break
-
-        resolved: dict[int, float] = {}
-        for group, values in offsets.items():
-            if values:
-                resolved[group] = statistics.median(values)
-        return resolved
 
     @staticmethod
     def _bucket_lines(tokens: list[TextToken], y_tol: float = 1.3) -> list[list[TextToken]]:
@@ -305,7 +278,7 @@ class MaterialTableParser:
         return s
 
     def _classify_token(self, token: TextToken) -> str:
-        x = token.x - self.group_x_offsets.get(token.group, 0.0)
+        x = token.x
         if x < self.PT_MAX_X:
             return "pt_no"
         if self.DESC_MIN_X <= x < self.DESC_MAX_X:
@@ -320,9 +293,7 @@ class MaterialTableParser:
 
     def parse(self) -> list[MaterialRow]:
         # Focus on right-side material table zone; avoid unrelated title block text.
-        table_tokens = [
-            t for t in self.tokens if (t.x - self.group_x_offsets.get(t.group, 0.0)) >= 1260.0
-        ]
+        table_tokens = [t for t in self.tokens if t.x >= 1260.0]
         lines = self._bucket_lines(table_tokens)
 
         rows: list[MaterialRow] = []
