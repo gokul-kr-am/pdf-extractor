@@ -525,6 +525,37 @@ class PlainTextMaterialParser:
     """Fallback parser using plain extracted text when positional parsing fails."""
 
     ITEM_RE = re.compile(r"^\s*(\d+)\s+(.+?)\s+(\d+(?:\.\d+)?)\s*$")
+    NUM_RE = re.compile(r"^\d+(?:\.\d+)?$")
+
+    @classmethod
+    def _parse_item_line(cls, line: str) -> tuple[str, str, str] | None:
+        # Strict pattern first.
+        m = cls.ITEM_RE.match(line)
+        if m:
+            return (m.group(1), m.group(2), m.group(3))
+
+        parts = line.split()
+        if len(parts) < 3 or not parts[0].isdigit():
+            return None
+
+        pt_no = parts[0]
+        qty = ""
+        qty_idx: int | None = None
+        for idx in range(len(parts) - 1, 0, -1):
+            if cls.NUM_RE.fullmatch(parts[idx]):
+                qty = parts[idx]
+                qty_idx = idx
+                break
+
+        if qty_idx is None or qty_idx <= 1:
+            description = " ".join(parts[1:])
+        else:
+            description = " ".join(parts[1:qty_idx])
+
+        if not description or not re.search(r"[A-Za-z]", description):
+            return None
+
+        return (pt_no, description, qty)
 
     @classmethod
     def parse_pdf(cls, pdf_path: Path) -> list[MaterialRow]:
@@ -541,6 +572,7 @@ class PlainTextMaterialParser:
         rows: list[MaterialRow] = []
         section = ""
         category = ""
+        current: MaterialRow | None = None
 
         for page in reader.pages:
             try:
@@ -578,23 +610,25 @@ class PlainTextMaterialParser:
                     category = "VALVES"
                     continue
 
-                m = cls.ITEM_RE.match(line)
-                if not m:
+                item = cls._parse_item_line(line)
+                if not item:
+                    # Append likely wrapped continuation text to prior item.
+                    if current and not any(h in upper for h in ("ISSUED FOR CONSTRUCTION", "PAGE ")):
+                        current.description = f"{current.description} {line}".strip()
                     continue
 
-                pt_no, middle, qty = m.group(1), m.group(2), m.group(3)
-                rows.append(
-                    MaterialRow(
-                        section=section,
-                        category=category,
-                        pt_no=pt_no,
-                        description=middle,
-                        size_inch="",
-                        commodity="",
-                        code="",
-                        qty=qty,
-                    )
+                pt_no, middle, qty = item
+                current = MaterialRow(
+                    section=section,
+                    category=category,
+                    pt_no=pt_no,
+                    description=middle,
+                    size_inch="",
+                    commodity="",
+                    code="",
+                    qty=qty,
                 )
+                rows.append(current)
 
         debug_log(f"plaintext fallback rows={len(rows)}")
         return rows
