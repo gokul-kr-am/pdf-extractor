@@ -600,6 +600,31 @@ class PlainTextMaterialParser:
         return rows
 
 
+def merge_rows(primary_rows: list[MaterialRow], fallback_rows: list[MaterialRow]) -> list[MaterialRow]:
+    """Merge parser outputs while preserving richer primary-row fields when duplicates overlap."""
+    merged: list[MaterialRow] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    def row_key(row: MaterialRow) -> tuple[str, str, str]:
+        return (row.pt_no.strip(), row.description.strip().upper(), row.qty.strip())
+
+    for row in primary_rows:
+        key = row_key(row)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(row)
+
+    for row in fallback_rows:
+        key = row_key(row)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(row)
+
+    return merged
+
+
 class XlsxWriter:
     @staticmethod
     def _col_name(index: int) -> str:
@@ -727,11 +752,12 @@ def main() -> None:
     if not tokens:
         raise SystemExit("No extractable text tokens found in PDF.")
 
-    rows = MaterialTableParser(tokens).parse()
-    debug_log(f"cli primary parser rows={len(rows)}")
-    if not rows:
-        rows = PlainTextMaterialParser.parse_pdf(args.input_pdf)
-        debug_log(f"cli plaintext fallback rows={len(rows)}")
+    primary_rows = MaterialTableParser(tokens).parse()
+    debug_log(f"cli primary parser rows={len(primary_rows)}")
+    fallback_rows = PlainTextMaterialParser.parse_pdf(args.input_pdf)
+    debug_log(f"cli plaintext fallback rows={len(fallback_rows)}")
+    rows = merge_rows(primary_rows, fallback_rows)
+    debug_log(f"cli merged rows={len(rows)}")
     if not rows:
         raise SystemExit(
             "No material rows were detected. Try a clearer PDF or adjust parser thresholds."

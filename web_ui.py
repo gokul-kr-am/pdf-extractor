@@ -15,6 +15,7 @@ from extract_materials import (
     PlainTextMaterialParser,
     XlsxWriter,
     debug_log,
+    merge_rows,
 )
 
 HOST = os.environ.get("HOST", "0.0.0.0")
@@ -236,11 +237,12 @@ class AppHandler(BaseHTTPRequestHandler):
                 if not tokens:
                     raise ValueError("Could not extract text from PDF")
 
-                rows = MaterialTableParser(tokens).parse()
-                debug_log(f"web request: primary parser rows={len(rows)}")
-                if not rows:
-                    rows = PlainTextMaterialParser.parse_pdf(input_pdf)
-                    debug_log(f"web request: plaintext fallback rows={len(rows)}")
+                primary_rows = MaterialTableParser(tokens).parse()
+                debug_log(f"web request: primary parser rows={len(primary_rows)}")
+                fallback_rows = PlainTextMaterialParser.parse_pdf(input_pdf)
+                debug_log(f"web request: plaintext fallback rows={len(fallback_rows)}")
+                rows = merge_rows(primary_rows, fallback_rows)
+                debug_log(f"web request: merged rows={len(rows)}")
                 if not rows:
                     raise ValueError("No material rows found in this PDF")
 
