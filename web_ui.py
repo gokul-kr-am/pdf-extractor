@@ -11,8 +11,8 @@ from pathlib import Path
 
 from extract_materials import MaterialTableParser, PdfTextExtractor, XlsxWriter
 
-HOST = "0.0.0.0"
-PORT = int(os.environ.get("PORT", "8000"))
+HOST = os.environ.get("HOST", "0.0.0.0")
+PORT = int(os.environ.get("PORT", "10000"))
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
 

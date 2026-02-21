@@ -4,7 +4,11 @@ This project extracts material table details from piping/material drawing PDFs a
 
 ## Requirements
 - Python 3.9+
-- No external Python packages needed
+- Install dependencies:
+
+```bash
+pip3 install -r requirements.txt
+```
 
 ## 1) CLI Usage
 

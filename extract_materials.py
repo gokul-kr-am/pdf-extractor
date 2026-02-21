@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Extract material table details from PDF to Excel (.xlsx).
-
-This script uses only Python standard library modules.
-"""
+"""Extract material table details from PDF to Excel (.xlsx)."""
 
 from __future__ import annotations
 
@@ -15,6 +12,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+try:
+    from pypdf import PdfReader
+except Exception:  # pragma: no cover - dependency availability handled at runtime
+    PdfReader = None
+
 
 STREAM_RE = re.compile(rb"stream\r?\n")
 BT_ET_RE = re.compile(rb"BT(.*?)ET", re.S)
@@ -24,10 +26,14 @@ TM_RE = re.compile(
 Tj_RE = re.compile(rb"\((.*?)(?<!\\)\)\s*Tj", re.S)
 TJ_RE = re.compile(rb"\[(.*?)\]\s*TJ", re.S)
 TJ_STR_RE = re.compile(rb"\((.*?)(?<!\\)\)", re.S)
+INVALID_XML_CHARS_RE = re.compile(
+    r"[\x00-\x08\x0B\x0C\x0E-\x1F\uD800-\uDFFF\uFFFE\uFFFF]"
+)
 
 
 @dataclass
 class TextToken:
+    group: int
     x: float
     y: float
     text: str
@@ -95,11 +101,49 @@ class PdfTextExtractor:
         # PDF text is often WinAnsi; latin1 is a safe byte-preserving decode.
         return out.decode("latin1", errors="ignore")
 
-    def extract_tokens(self) -> list[TextToken]:
-        raw = self.pdf_path.read_bytes()
-        tokens: list[TextToken] = []
+    def _extract_tokens_pypdf(self) -> list[TextToken]:
+        if PdfReader is None:
+            raise RuntimeError("Missing dependency: install with `pip3 install -r requirements.txt`")
 
-        for stream_match in STREAM_RE.finditer(raw):
+        tokens: list[TextToken] = []
+        try:
+            reader = PdfReader(str(self.pdf_path))
+        except Exception:
+            return []
+
+        for page_idx, page in enumerate(reader.pages):
+            page_tokens: list[TextToken] = []
+
+            def visitor_text(text: str, cm: object, tm: object, font_dict: object, font_size: object) -> None:
+                if not text:
+                    return
+
+                try:
+                    x = float(tm[4])  # type: ignore[index]
+                    y = float(tm[5])  # type: ignore[index]
+                except Exception:
+                    x = 0.0
+                    y = 0.0
+
+                for chunk in str(text).splitlines():
+                    cleaned = chunk.strip()
+                    if cleaned:
+                        page_tokens.append(TextToken(group=page_idx, x=x, y=y, text=cleaned))
+
+            try:
+                page.extract_text(visitor_text=visitor_text)
+            except Exception:
+                continue
+
+            tokens.extend(page_tokens)
+
+        return tokens
+
+    def _extract_stream_token_groups(self) -> list[list[TextToken]]:
+        raw = self.pdf_path.read_bytes()
+        groups: list[list[TextToken]] = []
+
+        for group_idx, stream_match in enumerate(STREAM_RE.finditer(raw)):
             start = stream_match.end()
             end = raw.find(b"endstream", start)
             if end < 0:
@@ -117,6 +161,7 @@ class PdfTextExtractor:
             if b"BT" not in decoded:
                 continue
 
+            stream_tokens: list[TextToken] = []
             for block_match in BT_ET_RE.finditer(decoded):
                 block = block_match.group(1)
                 tm = TM_RE.search(block)
@@ -137,9 +182,40 @@ class PdfTextExtractor:
 
                 text = "".join(parts).strip()
                 if text:
-                    tokens.append(TextToken(x=x, y=y, text=text))
+                    stream_tokens.append(TextToken(group=group_idx, x=x, y=y, text=text))
 
-        return tokens
+            if stream_tokens:
+                groups.append(stream_tokens)
+
+        return groups
+
+    def extract_token_groups(self) -> list[list[TextToken]]:
+        tokens = self.extract_tokens()
+        groups: list[list[TextToken]] = []
+        current_group: int | None = None
+        current: list[TextToken] = []
+
+        for token in tokens:
+            if current_group is None or token.group != current_group:
+                if current:
+                    groups.append(current)
+                current = [token]
+                current_group = token.group
+                continue
+            current.append(token)
+
+        if current:
+            groups.append(current)
+        return groups
+
+    def extract_tokens(self) -> list[TextToken]:
+        tokens = self._extract_tokens_pypdf()
+        if tokens:
+            return tokens
+
+        # Fallback path for unusual files where pypdf returns no positioned text.
+        groups = self._extract_stream_token_groups()
+        return [token for group in groups for token in group]
 
 
 class MaterialTableParser:
@@ -158,18 +234,28 @@ class MaterialTableParser:
     QTY_MIN_X = 1611.0
 
     def __init__(self, tokens: Iterable[TextToken]) -> None:
-        self.tokens = sorted(tokens, key=lambda t: (-t.y, t.x))
+        # Preserve stream/page progression first, then line geometry within each group.
+        self.tokens = sorted(tokens, key=lambda t: (t.group, -t.y, t.x))
 
     @staticmethod
     def _bucket_lines(tokens: list[TextToken], y_tol: float = 1.3) -> list[list[TextToken]]:
         lines: list[list[TextToken]] = []
         current: list[TextToken] = []
         current_y: float | None = None
+        current_group: int | None = None
 
         for t in tokens:
             if current_y is None:
                 current = [t]
                 current_y = t.y
+                current_group = t.group
+                continue
+
+            if t.group != current_group:
+                lines.append(sorted(current, key=lambda v: v.x))
+                current = [t]
+                current_y = t.y
+                current_group = t.group
                 continue
 
             if abs(t.y - current_y) <= y_tol:
@@ -178,6 +264,7 @@ class MaterialTableParser:
                 lines.append(sorted(current, key=lambda v: v.x))
                 current = [t]
                 current_y = t.y
+                current_group = t.group
 
         if current:
             lines.append(sorted(current, key=lambda v: v.x))
@@ -233,7 +320,12 @@ class MaterialTableParser:
                 continue
 
             if "ISSUED FOR CONSTRUCTION" in text_line and section:
-                break
+                if current:
+                    rows.append(current)
+                    current = None
+                section = ""
+                category = ""
+                continue
 
             # Skip headers and continuation markers
             header_markers = (
@@ -343,9 +435,14 @@ class XlsxWriter:
         return out
 
     @classmethod
+    def _xml_safe_text(cls, value: str) -> str:
+        # XLSX sheet XML only allows a restricted subset of Unicode code points.
+        return INVALID_XML_CHARS_RE.sub("", value)
+
+    @classmethod
     def _cell(cls, row_idx: int, col_idx: int, value: str) -> str:
         ref = f"{cls._col_name(col_idx)}{row_idx}"
-        escaped = html.escape(value)
+        escaped = html.escape(cls._xml_safe_text(value))
         return f'<c r="{ref}" t="inlineStr"><is><t>{escaped}</t></is></c>'
 
     @classmethod
@@ -454,8 +551,7 @@ def main() -> None:
     if not tokens:
         raise SystemExit("No extractable text tokens found in PDF.")
 
-    table_parser = MaterialTableParser(tokens)
-    rows = table_parser.parse()
+    rows = MaterialTableParser(tokens).parse()
     if not rows:
         raise SystemExit(
             "No material rows were detected. Try a clearer PDF or adjust parser thresholds."
